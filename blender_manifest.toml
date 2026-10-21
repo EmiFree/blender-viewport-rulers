@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "viewport_rulers"
+version = "1.0.0"
+name = "Viewport Rulers"
+tagline = "Rulers along the top and left edges of the 3D viewport"
+maintainer = "Emily Freeman"
+type = "add-on"
+
+blender_version_min = "5.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
