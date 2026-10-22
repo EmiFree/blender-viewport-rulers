@@ -107,6 +107,7 @@ def draw_rulers():
 
     ruler_thickness = prefs.thickness
     left_offset = prefs.left_offset if prefs.use_left_offset else 0
+    top_offset = prefs.top_offset if prefs.use_top_offset else 0
     bg_color = (*prefs.bg_color, prefs.bg_alpha)
     tick_color = (*prefs.tick_color, 1.0)
     text_color = prefs.text_color
@@ -155,105 +156,150 @@ def draw_rulers():
 
     ox, oy = origin_screen
 
+    show_top = prefs.show_top
+    show_left = prefs.show_left
+    show_right = prefs.show_right
+    show_bottom = prefs.show_bottom
+
+    if not (show_top or show_left or show_right or show_bottom):
+        return
+
+    # Edges of the rulers, after offsets
+    top_y = height - top_offset
+    left_x = left_offset
+
+    # Inner bounds of the uncovered viewport, used to clip ticks
+    x_min = left_x + ruler_thickness if show_left else 0
+    x_max = width - ruler_thickness if show_right else width
+    y_min = ruler_thickness if show_bottom else 0
+    y_max = top_y - ruler_thickness if show_top else height
+
     # Draw background quads
     shader = gpu.shader.from_builtin('UNIFORM_COLOR')
     gpu.state.blend_set('ALPHA')
 
-    # Top ruler background
-    verts_top = [
-        (0, height), (width, height),
-        (width, height - ruler_thickness), (0, height - ruler_thickness)
-    ]
-    indices_top = [(0, 1, 2), (0, 2, 3)]
-    batch_top = batch_for_shader(shader, 'TRIS', {"pos": verts_top}, indices=indices_top)
+    quads = []
+    if show_top:
+        quads.append((0, top_y - ruler_thickness, width, top_y))
+    if show_bottom:
+        quads.append((0, 0, width, ruler_thickness))
+    if show_left:
+        quads.append((left_x, y_min, left_x + ruler_thickness, y_max))
+    if show_right:
+        quads.append((width - ruler_thickness, y_min, width, y_max))
+
+    verts_bg = []
+    indices_bg = []
+    for x0, y0, x1, y1 in quads:
+        i = len(verts_bg)
+        verts_bg += [(x0, y1), (x1, y1), (x1, y0), (x0, y0)]
+        indices_bg += [(i, i + 1, i + 2), (i, i + 2, i + 3)]
+    batch_bg = batch_for_shader(shader, 'TRIS', {"pos": verts_bg}, indices=indices_bg)
     shader.bind()
     shader.uniform_float("color", bg_color)
-    batch_top.draw(shader)
-
-    # Left ruler background
-    verts_left = [
-        (left_offset, height - ruler_thickness), (left_offset + ruler_thickness, height - ruler_thickness),
-        (left_offset + ruler_thickness, 0), (left_offset, 0)
-    ]
-    indices_left = [(0, 1, 2), (0, 2, 3)]
-    batch_left = batch_for_shader(shader, 'TRIS', {"pos": verts_left}, indices=indices_left)
-    shader.uniform_float("color", bg_color)
-    batch_left.draw(shader)
+    batch_bg.draw(shader)
 
     # Draw tick marks and labels
-    # Horizontal ruler (top)
     tick_lines = []
+    blf.size(0, 11)
+    blf.color(0, *text_color, 1.0)
 
-    # Determine visible range in scene units along horizontal
-    # Screen x=0 and x=width correspond to some scene coordinate
-    # The display-unit coordinate at screen x is: (x - ox) / px_per_unit_h
+    # Horizontal rulers (top and bottom)
+    if show_top or show_bottom:
+        # The display-unit coordinate at screen x is: (x - ox) / px_per_unit_h
+        h_start = (x_min - ox) / px_per_unit_h
+        h_end = (x_max - ox) / px_per_unit_h
 
-    h_start = -ox / px_per_unit_h
-    h_end = (width - ox) / px_per_unit_h
+        first_tick_h = int(h_start / tick_step_h) * tick_step_h
+        if first_tick_h < h_start:
+            first_tick_h += tick_step_h
+        # Start one step early so the half tick before the first full tick is drawn
+        t = first_tick_h - tick_step_h
 
-    first_tick_h = int(h_start / tick_step_h) * tick_step_h
-    if first_tick_h < h_start:
-        first_tick_h += tick_step_h
+        while t <= h_end:
+            t_snap = snap_value(t, tick_step_h)
+            screen_x = ox + t_snap * px_per_unit_h
+            if x_min < screen_x < x_max:
+                # Full tick
+                label = format_label(t_snap, unit_suffix)
+                tw, th = blf.dimensions(0, label)
+                if show_top:
+                    tick_lines.append((screen_x, top_y))
+                    tick_lines.append((screen_x, top_y - ruler_thickness))
+                    blf.position(0, screen_x - tw / 2, top_y - ruler_thickness + 4, 0)
+                    blf.draw(0, label)
+                if show_bottom:
+                    tick_lines.append((screen_x, 0))
+                    tick_lines.append((screen_x, ruler_thickness))
+                    blf.position(0, screen_x - tw / 2, ruler_thickness - th - 4, 0)
+                    blf.draw(0, label)
 
-    t = first_tick_h
-    while t <= h_end:
-        t_snap = snap_value(t, tick_step_h)
-        screen_x = ox + t_snap * px_per_unit_h
-        if (left_offset + ruler_thickness) < screen_x < width:
-            # Full tick
-            tick_lines.append((screen_x, height))
-            tick_lines.append((screen_x, height - ruler_thickness))
-            # Label
-            label = format_label(t_snap, unit_suffix)
-            blf.size(0, 11)
-            tw, th = blf.dimensions(0, label)
-            blf.position(0, screen_x - tw / 2, height - ruler_thickness + 4, 0)
-            blf.color(0, *text_color, 1.0)
-            blf.draw(0, label)
+            # Half ticks
+            half_x = ox + (t + tick_step_h / 2) * px_per_unit_h
+            if x_min < half_x < x_max:
+                if show_top:
+                    tick_lines.append((half_x, top_y))
+                    tick_lines.append((half_x, top_y - ruler_thickness * 0.5))
+                if show_bottom:
+                    tick_lines.append((half_x, 0))
+                    tick_lines.append((half_x, ruler_thickness * 0.5))
 
-        # Half ticks
-        half_x = ox + (t + tick_step_h / 2) * px_per_unit_h
-        if (left_offset + ruler_thickness) < half_x < width:
-            tick_lines.append((half_x, height))
-            tick_lines.append((half_x, height - ruler_thickness * 0.5))
+            t += tick_step_h
 
-        t += tick_step_h
+    # Vertical rulers (left and right)
+    if show_left or show_right:
+        v_start = (y_min - oy) / px_per_unit_v
+        v_end = (y_max - oy) / px_per_unit_v
 
-    # Vertical ruler (left)
-    v_start = -oy / px_per_unit_v
-    v_end = (height - ruler_thickness - oy) / px_per_unit_v
+        first_tick_v = int(v_start / tick_step_v) * tick_step_v
+        if first_tick_v < v_start:
+            first_tick_v += tick_step_v
+        t = first_tick_v - tick_step_v
 
-    first_tick_v = int(v_start / tick_step_v) * tick_step_v
-    if first_tick_v < v_start:
-        first_tick_v += tick_step_v
+        while t <= v_end:
+            t_snap = snap_value(t, tick_step_v)
+            screen_y = oy + t_snap * px_per_unit_v
+            if y_min < screen_y < y_max:
+                # Label (rotated is hard with blf, so draw horizontally)
+                label = format_label(t_snap, unit_suffix)
+                tw, th = blf.dimensions(0, label)
+                if show_left:
+                    tick_lines.append((left_x, screen_y))
+                    tick_lines.append((left_x + ruler_thickness, screen_y))
+                    blf.position(0, left_x + 3, screen_y + 3, 0)
+                    blf.draw(0, label)
+                if show_right:
+                    tick_lines.append((width, screen_y))
+                    tick_lines.append((width - ruler_thickness, screen_y))
+                    blf.position(0, width - tw - 3, screen_y + 3, 0)
+                    blf.draw(0, label)
 
-    t = first_tick_v
-    while t <= v_end:
-        t_snap = snap_value(t, tick_step_v)
-        screen_y = oy + t_snap * px_per_unit_v
-        if 0 < screen_y < height - ruler_thickness:
-            tick_lines.append((left_offset, screen_y))
-            tick_lines.append((left_offset + ruler_thickness, screen_y))
-            # Label (rotated is hard with blf, so draw horizontally)
-            label = format_label(t_snap, unit_suffix)
-            blf.size(0, 11)
-            tw, th = blf.dimensions(0, label)
-            blf.position(0, left_offset + 3, screen_y + 3, 0)
-            blf.color(0, *text_color, 1.0)
-            blf.draw(0, label)
+            half_y = oy + (t + tick_step_v / 2) * px_per_unit_v
+            if y_min < half_y < y_max:
+                if show_left:
+                    tick_lines.append((left_x, half_y))
+                    tick_lines.append((left_x + ruler_thickness * 0.5, half_y))
+                if show_right:
+                    tick_lines.append((width, half_y))
+                    tick_lines.append((width - ruler_thickness * 0.5, half_y))
 
-        half_y = oy + (t + tick_step_v / 2) * px_per_unit_v
-        if 0 < half_y < height - ruler_thickness:
-            tick_lines.append((left_offset, half_y))
-            tick_lines.append((left_offset + ruler_thickness * 0.5, half_y))
+            t += tick_step_v
 
-        t += tick_step_v
-
-    # Draw unit label in the corner
-    blf.size(0, 10)
-    blf.position(0, left_offset + 4, height - ruler_thickness + 4, 0)
-    blf.color(0, *text_color, 0.7)
-    blf.draw(0, unit_suffix)
+    # Draw unit label in the first corner where a horizontal and vertical ruler meet
+    corner = None
+    if show_top and show_left:
+        corner = (left_x + 4, top_y - ruler_thickness + 4)
+    elif show_top and show_right:
+        corner = (width - ruler_thickness + 4, top_y - ruler_thickness + 4)
+    elif show_bottom and show_left:
+        corner = (left_x + 4, 4)
+    elif show_bottom and show_right:
+        corner = (width - ruler_thickness + 4, 4)
+    if corner is not None:
+        blf.size(0, 10)
+        blf.position(0, *corner, 0)
+        blf.color(0, *text_color, 0.7)
+        blf.draw(0, unit_suffix)
 
     # Draw all tick lines
     if tick_lines:
@@ -278,7 +324,31 @@ class ViewportRulersProperties(bpy.types.PropertyGroup):
         description="Pixel thickness of the ruler bars",
         default=24,
         min=16,
-        max=48,
+        max=96,
+    )
+    show_top: bpy.props.BoolProperty(
+        name="Top",
+        description="Show a ruler along the top edge of the viewport",
+        default=True,
+        update=lambda self, ctx: tag_redraw(ctx),
+    )
+    show_left: bpy.props.BoolProperty(
+        name="Left",
+        description="Show a ruler along the left edge of the viewport",
+        default=True,
+        update=lambda self, ctx: tag_redraw(ctx),
+    )
+    show_right: bpy.props.BoolProperty(
+        name="Right",
+        description="Show a ruler along the right edge of the viewport",
+        default=False,
+        update=lambda self, ctx: tag_redraw(ctx),
+    )
+    show_bottom: bpy.props.BoolProperty(
+        name="Bottom",
+        description="Show a ruler along the bottom edge of the viewport",
+        default=False,
+        update=lambda self, ctx: tag_redraw(ctx),
     )
     use_left_offset: bpy.props.BoolProperty(
         name="Left Ruler Offset",
@@ -291,7 +361,20 @@ class ViewportRulersProperties(bpy.types.PropertyGroup):
         description="Shift the left ruler right so the toolbar doesn't cover it",
         default=46,
         min=0,
-        max=200,
+        max=300,
+    )
+    use_top_offset: bpy.props.BoolProperty(
+        name="Top Ruler Offset",
+        description="Shift the top ruler down so the header doesn't cover it",
+        default=False,
+        update=lambda self, ctx: tag_redraw(ctx),
+    )
+    top_offset: bpy.props.IntProperty(
+        name="Top Offset",
+        description="Shift the top ruler down so the header doesn't cover it",
+        default=26,
+        min=0,
+        max=300,
     )
     bg_color: bpy.props.FloatVectorProperty(
         name="Background",
@@ -352,6 +435,15 @@ class VIEW3D_PT_viewport_rulers(bpy.types.Panel):
         layout.active = prefs.enabled
 
         layout.prop(prefs, "thickness")
+        row = layout.row(align=True)
+        row.prop(prefs, "show_top", toggle=True)
+        row.prop(prefs, "show_left", toggle=True)
+        row.prop(prefs, "show_right", toggle=True)
+        row.prop(prefs, "show_bottom", toggle=True)
+        layout.prop(prefs, "use_top_offset")
+        row = layout.row()
+        row.active = prefs.use_top_offset
+        row.prop(prefs, "top_offset")
         layout.prop(prefs, "use_left_offset")
         row = layout.row()
         row.active = prefs.use_left_offset

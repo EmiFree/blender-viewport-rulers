@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "viewport_rulers"
-version = "1.0.0"
+version = "1.1.0"
 name = "Viewport Rulers"
-tagline = "Rulers along the top and left edges of the 3D viewport"
+tagline = "Rulers along the edges of the 3D viewport"
 maintainer = "Emily Freeman"
 type = "add-on"
 
